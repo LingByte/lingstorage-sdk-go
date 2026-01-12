@@ -225,6 +225,47 @@ func (c *Client) BatchUpload(req *BatchUploadRequest) (*BatchUploadResult, error
 	return result, nil
 }
 
+// Ping check server if is alive
+func (c *Client) Ping() error {
+	url := strings.TrimRight(c.config.BaseURL, "/")
+
+	httpReq, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create ping request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	var resp *http.Response
+	var lastErr error
+	for i := 0; i <= c.config.RetryCount; i++ {
+		resp, lastErr = c.httpClient.Do(httpReq)
+		if lastErr == nil && resp.StatusCode < 500 {
+			break
+		}
+		if i < c.config.RetryCount {
+			time.Sleep(time.Duration(i+1) * time.Second)
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("ping request failed after %d retries: %w", c.config.RetryCount, lastErr)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("ping failed with status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // uploadReader common upload method
 func (c *Client) uploadReader(reader io.Reader, filename string, size int64, req *UploadRequest) (*UploadResult, error) {
 	var buf bytes.Buffer
