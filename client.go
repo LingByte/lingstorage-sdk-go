@@ -96,6 +96,22 @@ type BatchUploadRequest struct {
 	OnFileProgress    func(uploaded, total int64)                // signal file upload progress
 }
 
+// UploadFromReaderRequest read from io.Reader
+type UploadFromReaderRequest struct {
+	Reader            io.Reader
+	Filename          string
+	Size              int64
+	Bucket            string
+	Key               string
+	AllowedTypes      []string
+	Compress          bool
+	Quality           int
+	Watermark         bool
+	WatermarkText     string
+	WatermarkPosition string
+	OnProgress        func(uploaded, total int64)
+}
+
 // UploadResult upload result
 type UploadResult struct {
 	Key          string `json:"key"`
@@ -153,6 +169,38 @@ func (c *Client) UploadFile(req *UploadRequest) (*UploadResult, error) {
 	}
 
 	return c.uploadReader(reader, filepath.Base(req.FilePath), fileInfo.Size(), req)
+}
+
+// UploadFromReader upload from io.Reader
+func (c *Client) UploadFromReader(req *UploadFromReaderRequest) (*UploadResult, error) {
+	size := req.Size
+	if size <= 0 {
+		if seeker, ok := req.Reader.(io.Seeker); ok {
+			currentPos, _ := seeker.Seek(0, io.SeekCurrent)
+			size, _ = seeker.Seek(0, io.SeekEnd)
+			seeker.Seek(currentPos, io.SeekStart)
+		}
+	}
+	var reader io.Reader = req.Reader
+	if req.OnProgress != nil && size > 0 {
+		reader = &progressReader{
+			reader:   req.Reader,
+			total:    size,
+			callback: req.OnProgress,
+		}
+	}
+	uploadReq := &UploadRequest{
+		Bucket:            req.Bucket,
+		Key:               req.Key,
+		AllowedTypes:      req.AllowedTypes,
+		Compress:          req.Compress,
+		Quality:           req.Quality,
+		Watermark:         req.Watermark,
+		WatermarkText:     req.WatermarkText,
+		WatermarkPosition: req.WatermarkPosition,
+	}
+
+	return c.uploadReader(reader, req.Filename, size, uploadReq)
 }
 
 // UploadBytes upload file from bytes
