@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/LingByte/lingstorage-sdk"
+	"github.com/LingByte/lingstorage-sdk-go"
 )
 
 func main() {

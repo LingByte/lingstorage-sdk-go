@@ -1,4 +1,4 @@
-module github.com/LingByte/lingstorage-sdk
+module github.com/LingByte/lingstorage-sdk-go
 
 go 1.21
 

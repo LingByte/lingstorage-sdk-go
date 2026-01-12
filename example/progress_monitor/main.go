@@ -2,11 +2,10 @@ package main
 
 import (
 	"fmt"
+	"github.com/LingByte/lingstorage-sdk-go"
 	"log"
 	"os"
 	"time"
-
-	"github.com/LingByte/lingstorage-sdk"
 )
 
 func main() {

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LingByte/lingstorage-sdk/constants"
+	"github.com/LingByte/lingstorage-sdk-go/constants"
 )
 
 // Client LingStorage SDK Client
