@@ -109,6 +109,11 @@ example-progress: ## 运行进度监控示例
 	@echo "🚀 运行进度监控示例..."
 	@cd examples/progress_monitoring && go run main.go
 
+.PHONY: example-file-management
+example-file-management: ## 运行文件管理示例
+	@echo "🚀 运行文件管理示例..."
+	@cd examples/file_management && go run main.go
+
 # 构建示例
 .PHONY: build-examples
 build-examples: ## Build all examples
@@ -118,6 +123,7 @@ build-examples: ## Build all examples
 	@cd examples/batch_upload && go build -o ../../bin/batch_upload main.go
 	@cd examples/image_processing && go build -o ../../bin/image_processing main.go
 	@cd examples/progress_monitoring && go build -o ../../bin/progress_monitoring main.go
+	@cd examples/file_management && go build -o ../../bin/file_management main.go
 	@echo "✅ Example programs built, located in bin/ directory"
 
 # 安装开发工具

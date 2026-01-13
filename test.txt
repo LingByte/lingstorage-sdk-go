@@ -1,0 +1,2 @@
+Hello, LingStorage SDK!
+This is a test file for the Go SDK.

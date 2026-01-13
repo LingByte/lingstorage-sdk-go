@@ -483,3 +483,304 @@ func TestRetryMechanism(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, 3, attempts) // 应该重试了3次
 }
+
+func TestDeleteFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "DELETE" {
+			t.Errorf("Expected DELETE request, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/public/files/test-bucket/test-key" {
+			t.Errorf("Expected path /api/public/files/test-bucket/test-key, got %s", r.URL.Path)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "File deleted successfully",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	err := client.DeleteFile("test-bucket", "test-key")
+	if err != nil {
+		t.Errorf("DeleteFile failed: %v", err)
+	}
+}
+
+func TestGetFileURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/public/files/test-bucket/test-key/url" {
+			t.Errorf("Expected path /api/public/files/test-bucket/test-key/url, got %s", r.URL.Path)
+		}
+
+		expires := r.URL.Query().Get("expires")
+		if expires != "1h0m0s" {
+			t.Errorf("Expected expires=1h0m0s, got %s", expires)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data": map[string]interface{}{
+				"url": "https://example.com/test-bucket/test-key",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	url, err := client.GetFileURL("test-bucket", "test-key", time.Hour)
+	if err != nil {
+		t.Errorf("GetFileURL failed: %v", err)
+	}
+
+	expectedURL := "https://example.com/test-bucket/test-key"
+	if url != expectedURL {
+		t.Errorf("Expected URL %s, got %s", expectedURL, url)
+	}
+}
+
+func TestGetFileInfo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/public/files/test-bucket/test-key/info" {
+			t.Errorf("Expected path /api/public/files/test-bucket/test-key/info, got %s", r.URL.Path)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data": FileInfo{
+				Key:          "test-key",
+				Size:         1024,
+				LastModified: time.Now(),
+				ETag:         "test-etag",
+				ContentType:  "text/plain",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	fileInfo, err := client.GetFileInfo("test-bucket", "test-key")
+	if err != nil {
+		t.Errorf("GetFileInfo failed: %v", err)
+	}
+
+	if fileInfo.Key != "test-key" {
+		t.Errorf("Expected key test-key, got %s", fileInfo.Key)
+	}
+	if fileInfo.Size != 1024 {
+		t.Errorf("Expected size 1024, got %d", fileInfo.Size)
+	}
+}
+
+func TestListBuckets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/public/buckets" {
+			t.Errorf("Expected path /api/public/buckets, got %s", r.URL.Path)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data": map[string]interface{}{
+				"buckets": []string{"bucket1", "bucket2", "bucket3"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	buckets, err := client.ListBuckets("", false)
+	if err != nil {
+		t.Errorf("ListBuckets failed: %v", err)
+	}
+
+	expectedBuckets := []string{"bucket1", "bucket2", "bucket3"}
+	if len(buckets) != len(expectedBuckets) {
+		t.Errorf("Expected %d buckets, got %d", len(expectedBuckets), len(buckets))
+	}
+
+	for i, bucket := range buckets {
+		if bucket != expectedBuckets[i] {
+			t.Errorf("Expected bucket %s, got %s", expectedBuckets[i], bucket)
+		}
+	}
+}
+
+func TestCreateBucket(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/public/buckets" {
+			t.Errorf("Expected path /api/public/buckets, got %s", r.URL.Path)
+		}
+
+		var req CreateBucketRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("Failed to decode request: %v", err)
+		}
+
+		if req.BucketName != "test-bucket" {
+			t.Errorf("Expected bucket name test-bucket, got %s", req.BucketName)
+		}
+		if req.Region != "us-east-1" {
+			t.Errorf("Expected region us-east-1, got %s", req.Region)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Bucket created successfully",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	err := client.CreateBucket(&CreateBucketRequest{
+		BucketName: "test-bucket",
+		Region:     "us-east-1",
+	})
+	if err != nil {
+		t.Errorf("CreateBucket failed: %v", err)
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/public/files/src-bucket/src-key/copy" {
+			t.Errorf("Expected path /api/public/files/src-bucket/src-key/copy, got %s", r.URL.Path)
+		}
+
+		var reqBody map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Errorf("Failed to decode request: %v", err)
+		}
+
+		if reqBody["destBucket"] != "dest-bucket" {
+			t.Errorf("Expected destBucket dest-bucket, got %s", reqBody["destBucket"])
+		}
+		if reqBody["destKey"] != "dest-key" {
+			t.Errorf("Expected destKey dest-key, got %s", reqBody["destKey"])
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "File copied successfully",
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	err := client.CopyFile(&CopyFileRequest{
+		SrcBucket:  "src-bucket",
+		SrcKey:     "src-key",
+		DestBucket: "dest-bucket",
+		DestKey:    "dest-key",
+	})
+	if err != nil {
+		t.Errorf("CopyFile failed: %v", err)
+	}
+}
+
+func TestListFiles(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET request, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/public/buckets/test-bucket/files" {
+			t.Errorf("Expected path /api/public/buckets/test-bucket/files, got %s", r.URL.Path)
+		}
+
+		prefix := r.URL.Query().Get("prefix")
+		if prefix != "uploads/" {
+			t.Errorf("Expected prefix uploads/, got %s", prefix)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data": ListFilesResult{
+				Files: []FileInfo{
+					{
+						Key:          "uploads/file1.txt",
+						Size:         1024,
+						LastModified: time.Now(),
+						ContentType:  "text/plain",
+					},
+					{
+						Key:          "uploads/file2.jpg",
+						Size:         2048,
+						LastModified: time.Now(),
+						ContentType:  "image/jpeg",
+					},
+				},
+				Directories: []string{"uploads/images/", "uploads/docs/"},
+				NextMarker:  "",
+				IsTruncated: false,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(&Config{
+		BaseURL: server.URL,
+		APIKey:  "test-key",
+	})
+
+	result, err := client.ListFiles(&ListFilesRequest{
+		Bucket: "test-bucket",
+		Prefix: "uploads/",
+		Limit:  10,
+	})
+	if err != nil {
+		t.Errorf("ListFiles failed: %v", err)
+	}
+
+	if len(result.Files) != 2 {
+		t.Errorf("Expected 2 files, got %d", len(result.Files))
+	}
+
+	if result.Files[0].Key != "uploads/file1.txt" {
+		t.Errorf("Expected first file key uploads/file1.txt, got %s", result.Files[0].Key)
+	}
+}

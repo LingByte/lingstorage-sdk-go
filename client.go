@@ -112,6 +112,60 @@ type UploadFromReaderRequest struct {
 	OnProgress        func(uploaded, total int64)
 }
 
+// FileInfo 文件信息
+type FileInfo struct {
+	Key          string    `json:"key"`
+	Size         int64     `json:"size"`
+	LastModified time.Time `json:"lastModified"`
+	ETag         string    `json:"etag"`
+	ContentType  string    `json:"contentType"`
+}
+
+// ListFilesRequest 列举文件请求
+type ListFilesRequest struct {
+	Bucket    string `json:"bucket"`
+	Prefix    string `json:"prefix"`
+	Marker    string `json:"marker"`
+	Delimiter string `json:"delimiter"`
+	Limit     int    `json:"limit"`
+}
+
+// ListFilesResult 列举文件结果
+type ListFilesResult struct {
+	Files       []FileInfo `json:"files"`
+	Directories []string   `json:"directories"`
+	NextMarker  string     `json:"nextMarker"`
+	IsTruncated bool       `json:"isTruncated"`
+}
+
+// CreateBucketRequest 创建存储桶请求
+type CreateBucketRequest struct {
+	BucketName string `json:"bucketName"`
+	Region     string `json:"region"`
+}
+
+// CopyFileRequest 复制文件请求
+type CopyFileRequest struct {
+	SrcBucket  string `json:"srcBucket"`
+	SrcKey     string `json:"srcKey"`
+	DestBucket string `json:"destBucket"`
+	DestKey    string `json:"destKey"`
+}
+
+// MoveFileRequest 移动文件请求
+type MoveFileRequest struct {
+	SrcBucket  string `json:"srcBucket"`
+	SrcKey     string `json:"srcKey"`
+	DestBucket string `json:"destBucket"`
+	DestKey    string `json:"destKey"`
+}
+
+// SetBucketPrivateRequest 设置存储桶权限请求
+type SetBucketPrivateRequest struct {
+	BucketName string `json:"bucketName"`
+	IsPrivate  bool   `json:"isPrivate"`
+}
+
 // UploadResult upload result
 type UploadResult struct {
 	Key          string `json:"key"`
@@ -314,6 +368,450 @@ func (c *Client) Ping() error {
 	return nil
 }
 
+// DeleteFile 删除文件
+func (c *Client) DeleteFile(bucket, key string) error {
+	url := fmt.Sprintf("%s/api/public/files/%s/%s", strings.TrimRight(c.config.BaseURL, "/"), bucket, key)
+
+	httpReq, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.handleErrorResponse(resp)
+	}
+
+	return nil
+}
+
+// GetFileURL 获取文件访问URL
+func (c *Client) GetFileURL(bucket, key string, expires time.Duration) (string, error) {
+	url := fmt.Sprintf("%s/api/public/files/%s/%s/url", strings.TrimRight(c.config.BaseURL, "/"), bucket, key)
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 添加过期时间参数
+	if expires > 0 {
+		q := httpReq.URL.Query()
+		q.Set("expires", expires.String())
+		httpReq.URL.RawQuery = q.Encode()
+	}
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", c.handleErrorResponse(resp)
+	}
+
+	var apiResp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			URL string `json:"url"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return apiResp.Data.URL, nil
+}
+
+// GetFileInfo 获取文件信息
+func (c *Client) GetFileInfo(bucket, key string) (*FileInfo, error) {
+	url := fmt.Sprintf("%s/api/public/files/%s/%s/info", strings.TrimRight(c.config.BaseURL, "/"), bucket, key)
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp)
+	}
+
+	var apiResp struct {
+		Success bool     `json:"success"`
+		Data    FileInfo `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &apiResp.Data, nil
+}
+
+// ListFiles 列举文件
+func (c *Client) ListFiles(req *ListFilesRequest) (*ListFilesResult, error) {
+	url := fmt.Sprintf("%s/api/public/buckets/%s/files", strings.TrimRight(c.config.BaseURL, "/"), req.Bucket)
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 添加查询参数
+	q := httpReq.URL.Query()
+	if req.Prefix != "" {
+		q.Set("prefix", req.Prefix)
+	}
+	if req.Marker != "" {
+		q.Set("marker", req.Marker)
+	}
+	if req.Delimiter != "" {
+		q.Set("delimiter", req.Delimiter)
+	}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	httpReq.URL.RawQuery = q.Encode()
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp)
+	}
+
+	var apiResp struct {
+		Success bool            `json:"success"`
+		Data    ListFilesResult `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &apiResp.Data, nil
+}
+
+// ListBuckets 列举存储桶
+func (c *Client) ListBuckets(tagCondition string, shared bool) ([]string, error) {
+	url := fmt.Sprintf("%s/api/public/buckets", strings.TrimRight(c.config.BaseURL, "/"))
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// 添加查询参数
+	q := httpReq.URL.Query()
+	if tagCondition != "" {
+		q.Set("tagCondition", tagCondition)
+	}
+	if shared {
+		q.Set("shared", "true")
+	}
+	httpReq.URL.RawQuery = q.Encode()
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp)
+	}
+
+	var apiResp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Buckets []string `json:"buckets"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return apiResp.Data.Buckets, nil
+}
+
+// CreateBucket 创建存储桶
+func (c *Client) CreateBucket(req *CreateBucketRequest) error {
+	url := fmt.Sprintf("%s/api/public/buckets", strings.TrimRight(c.config.BaseURL, "/"))
+
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.CONETENT_TYPE, "application/json")
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.handleErrorResponse(resp)
+	}
+
+	return nil
+}
+
+// DeleteBucket 删除存储桶
+func (c *Client) DeleteBucket(bucketName string) error {
+	url := fmt.Sprintf("%s/api/public/buckets/%s", strings.TrimRight(c.config.BaseURL, "/"), bucketName)
+
+	httpReq, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.handleErrorResponse(resp)
+	}
+
+	return nil
+}
+
+// GetBucketDomains 获取存储桶域名
+func (c *Client) GetBucketDomains(bucketName string) ([]string, error) {
+	url := fmt.Sprintf("%s/api/public/buckets/%s/domains", strings.TrimRight(c.config.BaseURL, "/"), bucketName)
+
+	httpReq, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.handleErrorResponse(resp)
+	}
+
+	var apiResp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Domains []string `json:"domains"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return apiResp.Data.Domains, nil
+}
+
+// SetBucketPrivate 设置存储桶权限
+func (c *Client) SetBucketPrivate(req *SetBucketPrivateRequest) error {
+	url := fmt.Sprintf("%s/api/public/buckets/%s/private", strings.TrimRight(c.config.BaseURL, "/"), req.BucketName)
+
+	jsonData, err := json.Marshal(map[string]bool{"isPrivate": req.IsPrivate})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("PUT", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.CONETENT_TYPE, "application/json")
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.handleErrorResponse(resp)
+	}
+
+	return nil
+}
+
+// CopyFile 复制文件
+func (c *Client) CopyFile(req *CopyFileRequest) error {
+	url := fmt.Sprintf("%s/api/public/files/%s/%s/copy", strings.TrimRight(c.config.BaseURL, "/"), req.SrcBucket, req.SrcKey)
+
+	jsonData, err := json.Marshal(map[string]string{
+		"destBucket": req.DestBucket,
+		"destKey":    req.DestKey,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.CONETENT_TYPE, "application/json")
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.handleErrorResponse(resp)
+	}
+
+	return nil
+}
+
+// MoveFile 移动文件
+func (c *Client) MoveFile(req *MoveFileRequest) error {
+	url := fmt.Sprintf("%s/api/public/files/%s/%s/move", strings.TrimRight(c.config.BaseURL, "/"), req.SrcBucket, req.SrcKey)
+
+	jsonData, err := json.Marshal(map[string]string{
+		"destBucket": req.DestBucket,
+		"destKey":    req.DestKey,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(constants.CONETENT_TYPE, "application/json")
+	httpReq.Header.Set(constants.USER_AGENT, c.config.UserAgent)
+	if c.config.APIKey != "" {
+		httpReq.Header.Set(constants.XAPIKEY, c.config.APIKey)
+	}
+	if c.config.APISecret != "" {
+		httpReq.Header.Set(constants.XAPISECRET, c.config.APISecret)
+	}
+
+	resp, err := c.doRequestWithRetry(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.handleErrorResponse(resp)
+	}
+
+	return nil
+}
+
 // uploadReader common upload method
 func (c *Client) uploadReader(reader io.Reader, filename string, size int64, req *UploadRequest) (*UploadResult, error) {
 	var buf bytes.Buffer
@@ -422,6 +920,47 @@ func (c *Client) uploadReader(reader io.Reader, filename string, size int64, req
 		}
 	}
 	return &apiResp.Data, nil
+}
+
+// doRequestWithRetry 执行带重试的HTTP请求
+func (c *Client) doRequestWithRetry(req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	var lastErr error
+
+	for i := 0; i <= c.config.RetryCount; i++ {
+		resp, lastErr = c.httpClient.Do(req)
+		if lastErr == nil && resp.StatusCode < 500 {
+			break
+		}
+		if i < c.config.RetryCount {
+			time.Sleep(time.Duration(i+1) * time.Second)
+		}
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("request failed after %d retries: %w", c.config.RetryCount, lastErr)
+	}
+
+	return resp, nil
+}
+
+// handleErrorResponse 处理错误响应
+func (c *Client) handleErrorResponse(resp *http.Response) error {
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read error response: %w", err)
+	}
+
+	var apiErr APIError
+	if json.Unmarshal(respBody, &apiErr) == nil {
+		apiErr.StatusCode = resp.StatusCode
+		return &apiErr
+	}
+
+	return &APIError{
+		StatusCode: resp.StatusCode,
+		Message:    string(respBody),
+	}
 }
 
 // progressReader func reader from io.Reader
